@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Neon Outer Ship Body -->
+    <path
+        android:fillColor="#00FFFF"
+        android:pathData="M54,28 L78,80 L54,68 L30,80 Z" />
+
+    <!-- Bright Inner Core for Glow Effect -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,36 L68,72 L54,64 L40,72 Z" />
+
+</vector>
