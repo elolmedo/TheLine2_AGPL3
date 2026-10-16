@@ -31,6 +31,7 @@ data class Enemy(
     val radius: Float = 30f,
     val health: Int = 1,
     val maxHealth: Int = 1,
+    val carryingPowerUp: PowerUpType? = null,
     val id: Long = UUID.randomUUID().mostSignificantBits
 )
 
@@ -67,6 +68,32 @@ data class Asteroid(
     val id: Long = UUID.randomUUID().mostSignificantBits
 )
 
+data class Explosion(
+    val position: Offset,
+    val radius: Float = 45f,
+    val duration: Float = 0.5f,
+    val elapsedTime: Float = 0f,
+    val spriteType: String? = null,
+    val id: Long = UUID.randomUUID().mostSignificantBits
+)
+
+data class Spark(
+    val position: Offset,
+    val velocity: Offset,
+    val isWhite: Boolean = false,
+    val duration: Float = 0.35f,
+    val elapsedTime: Float = 0f,
+    val id: Long = UUID.randomUUID().mostSignificantBits
+)
+
+data class Shockwave(
+    val originY: Float,
+    val distanceProgress: Float = 0f,
+    val speed: Float = 900f,
+    val maxDistance: Float = 600f,
+    val id: Long = UUID.randomUUID().mostSignificantBits
+)
+
 data class GameState(
     val ship: Ship,
     val asteroids: List<Asteroid> = emptyList(),
@@ -74,6 +101,10 @@ data class GameState(
     val bullets: List<Bullet> = emptyList(),
     val items: List<Item> = emptyList(),
     val stars: List<Star> = emptyList(),
+    val explosions: List<Explosion> = emptyList(),
+    val sparks: List<Spark> = emptyList(),
+    val shockwaves: List<Shockwave> = emptyList(),
+    val flowOffset: Float = 0f,
     val score: Int = 0,
     val killCount: Int = 0,
     val lives: Int = 3,
@@ -84,7 +115,8 @@ data class GameState(
     val currentLevel: Int = 1,
     val scrollOffset: Float = 0f, // Vertical scroll progress
     val roadPoints: List<Offset> = emptyList(), // The guide line points in view
-    val levelOpacity: Float = 0f // For "Level N" title animation
+    val levelOpacity: Float = 0f, // For "Level N" title animation
+    val itemSpawnedThisLevel: Boolean = false // Track if item enemy was spawned
 )
 
 sealed class GameEvent {

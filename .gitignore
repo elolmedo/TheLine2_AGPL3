@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+app/google-services.json
+*.apk
+app/release/
+mkdir/
+u0026u0026/

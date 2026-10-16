@@ -9,16 +9,22 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import es.romsolutions.theline.game.GameViewModel
 import es.romsolutions.theline.ui.screens.GameScreen
 import es.romsolutions.theline.ui.screens.MenuScreen
+import es.romsolutions.theline.ui.screens.SplashScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            var currentScreen by remember { mutableStateOf<Screen>(Screen.Menu) }
+            var currentScreen by remember { mutableStateOf<Screen>(Screen.Splash) }
             val viewModel: GameViewModel = viewModel()
 
             when (val screen = currentScreen) {
+                is Screen.Splash -> {
+                    SplashScreen(onSplashFinished = {
+                        currentScreen = Screen.Menu
+                    })
+                }
                 is Screen.Menu -> {
                     MenuScreen(onStartGame = { level ->
                         currentScreen = Screen.Game(level)
@@ -37,6 +43,7 @@ class MainActivity : ComponentActivity() {
 }
 
 sealed class Screen {
+    object Splash : Screen()
     object Menu : Screen()
     data class Game(val level: Int) : Screen()
 }

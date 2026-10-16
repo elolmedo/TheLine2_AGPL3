@@ -20,6 +20,7 @@ class AdManager(private val context: Context) {
 
     private fun loadInterstitial() {
         val adRequest = AdRequest.Builder().build()
+        // Google AdMob Sample Interstitial Ad Unit ID for testing
         InterstitialAd.load(context, "ca-app-pub-3940256099942544/1033173712", adRequest,
             object : InterstitialAdLoadCallback() {
                 override fun onAdLoaded(ad: InterstitialAd) {
@@ -33,6 +34,7 @@ class AdManager(private val context: Context) {
 
     private fun loadRewarded() {
         val adRequest = AdRequest.Builder().build()
+        // Google AdMob Sample Rewarded Ad Unit ID for testing
         RewardedAd.load(context, "ca-app-pub-3940256099942544/5224354917", adRequest,
             object : RewardedAdLoadCallback() {
                 override fun onAdLoaded(ad: RewardedAd) {

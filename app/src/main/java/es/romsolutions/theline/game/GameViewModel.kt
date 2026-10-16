@@ -23,6 +23,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val events = _events.asSharedFlow()
 
     private var isRunning = false
+    private var isPaused = false
     private var lastUpdateTime = 0L
 
     // Input states
@@ -35,19 +36,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val fireInterval = 200L
     private var lastEnemySpawnTime = 0L
     private val enemySpawnInterval = 1500L
-    private var lastItemSpawnTime = 0L
-    private val itemSpawnInterval = 6000L // Reduced for testing
     private var lastAsteroidSpawnTime = 0L
     private val asteroidSpawnInterval = 1000L
+    private var lastCubeShootTime = 0L
+    private val cubeShootInterval = 1800L
 
     init {
         viewModelScope.launch {
             while (true) {
-                if (isRunning) {
+                if (isRunning && !isPaused) {
                     update()
                 }
                 delay(16)
             }
+        }
+    }
+
+    fun setPaused(paused: Boolean) {
+        isPaused = paused
+        if (!paused) {
+            lastUpdateTime = System.currentTimeMillis() // Reset time delta after unpausing
         }
     }
 
@@ -59,7 +67,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             currentState.ship.copy(
                 position = Offset(centerX, height * 0.8f),
                 velocity = Offset.Zero,
-                invulnerabilityFrames = 120
+                invulnerabilityFrames = 120,
+                activePowerUps = currentState.ship.activePowerUps,
+                shieldHealth = currentState.ship.shieldHealth
             )
         } else {
             Ship(position = Offset(centerX, height * 0.8f))
@@ -90,24 +100,38 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             levelOpacity = 1.0f,
             score = currentState?.score ?: 0,
             lives = currentState?.lives ?: 3,
-            killCount = 0
+            killCount = 0,
+            itemSpawnedThisLevel = false
         )
         isRunning = true
+        isPaused = false
         lastUpdateTime = System.currentTimeMillis()
+    }
+
+    var sessionPlayCount = 0
+
+    fun resetGame() {
+        isRunning = false
+        _gameState.value = null
     }
 
     fun continueGame() {
         val state = _gameState.value ?: return
+        val centerX = if (state.screenWidth > 0) state.screenWidth / 2f else state.ship.position.x
+        val centerY = if (state.screenHeight > 0) state.screenHeight * 0.8f else state.ship.position.y
         _gameState.value = state.copy(
             lives = 3,
             isGameOver = false,
             ship = state.ship.copy(
+                position = Offset(centerX, centerY),
+                velocity = Offset.Zero,
                 invulnerabilityFrames = 180,
                 activePowerUps = emptySet(),
                 shieldHealth = 0
             )
         )
         isRunning = true
+        isPaused = false
         lastUpdateTime = System.currentTimeMillis()
     }
 
@@ -234,6 +258,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             newProjectiles.add(Bullet(position = newShipPos, velocity = Offset(cos(bRad2).toFloat() * 500f, sin(bRad2).toFloat() * 500f), isHoming = true, radius = 8f))
         }
 
+        // Cube Enemies Shooting (red bullet at 10% offset of player's last position)
+        if (currentTime - lastCubeShootTime > cubeShootInterval) {
+            lastCubeShootTime = currentTime
+            state.enemies.filter { it.type == EnemyType.Cube && it.position.y > 0 && it.position.y < state.screenHeight }.forEach { cube ->
+                val targetX = newShipPos.x + (Random.nextFloat() - 0.5f) * (state.screenWidth * 0.10f)
+                val targetY = newShipPos.y + (Random.nextFloat() - 0.5f) * (state.screenHeight * 0.10f)
+                val targetPos = Offset(targetX, targetY)
+
+                val dir = targetPos - cube.position
+                val dist = dir.getDistance()
+                if (dist > 0) {
+                    val normDir = dir / dist
+                    val bulletSpeed = 450f
+                    newProjectiles.add(
+                        Bullet(
+                            position = cube.position,
+                            velocity = normDir * bulletSpeed,
+                            radius = 6f,
+                            isEnemyBullet = true
+                        )
+                    )
+                }
+            }
+        }
+
         updatedBullets = updatedBullets + newProjectiles
 
         // 5. Update Enemies & Asteroids
@@ -246,11 +295,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }.filter { it.position.y < state.screenHeight + 100 && it.position.x > -100 && it.position.x < state.screenWidth + 100 }
 
         val spawnedEnemies = mutableListOf<Enemy>()
+        var newItemSpawnedState = state.itemSpawnedThisLevel
         if (currentTime - lastEnemySpawnTime > enemySpawnInterval) {
             lastEnemySpawnTime = currentTime
             val spawnPos = Offset(Random.nextFloat() * state.screenWidth, -50f)
             val velocity = Offset(Random.nextFloat() * 200 - 100, Random.nextFloat() * 200 + 100)
-            spawnedEnemies.add(Enemy(position = spawnPos, velocity = velocity, type = EnemyType.entries.random()))
+            
+            // Only 1 enemy carries a power-up per level!
+            val powerUp = if (!state.itemSpawnedThisLevel && Random.nextFloat() < 0.4f) {
+                newItemSpawnedState = true
+                PowerUpType.entries.random()
+            } else null
+
+            spawnedEnemies.add(Enemy(position = spawnPos, velocity = velocity, type = EnemyType.entries.random(), carryingPowerUp = powerUp))
         }
 
         val spawnedAsteroids = mutableListOf<Asteroid>()
@@ -264,21 +321,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             spawnedAsteroids.add(Asteroid(position = spawnPos, velocity = Offset(Random.nextFloat() * 100 - 50, finalSpeed), radius = radius, health = sizeType + 1, maxHealth = sizeType + 1))
         }
 
-        // 6. Update Items
-        val updatedItems = state.items.map {
-            it.copy(position = it.position.copy(y = it.position.y + scrollSpeed * deltaTime))
-        }.filter { it.position.y < state.screenHeight + 100 }
+        // Update existing explosions
+        val updatedExplosions = state.explosions
+            .map { it.copy(elapsedTime = it.elapsedTime + deltaTime) }
+            .filter { it.elapsedTime < it.duration }
+            .toMutableList()
 
-        val spawnedItems = mutableListOf<Item>()
-        if (currentTime - lastItemSpawnTime > itemSpawnInterval) {
-            lastItemSpawnTime = currentTime
-            val roadPointForSpawn = state.roadPoints.filter { it.y < -200 }.randomOrNull()
-            if (roadPointForSpawn != null) {
-                spawnedItems.add(Item(position = roadPointForSpawn, type = PowerUpType.entries.random()))
-            }
-        }
-
-        // 7. Collision Detection
+        // 6. Collision Detection
         var currentScore = state.score
         var currentKillCount = state.killCount
         var currentLives = state.lives
@@ -288,44 +337,72 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val finalEnemies = (updatedEnemies + spawnedEnemies).toMutableList()
         val finalAsteroids = (updatedAsteroids + spawnedAsteroids).toMutableList()
         val finalBullets = updatedBullets.toMutableList()
-        val finalItems = (updatedItems + spawnedItems).toMutableList()
         
         val bulletsToRemove = mutableSetOf<Long>()
         val enemiesToRemove = mutableSetOf<Long>()
         val asteroidsToRemove = mutableSetOf<Long>()
-        val itemsToRemove = mutableSetOf<Long>()
         
         for (bullet in finalBullets) {
-            for (enemy in finalEnemies) {
-                if ((bullet.position - enemy.position).getDistance() < bullet.radius + enemy.radius) {
-                    bulletsToRemove.add(bullet.id); enemiesToRemove.add(enemy.id)
-                    currentScore += 100; currentKillCount++
-                    viewModelScope.launch { _events.emit(GameEvent.EnemyDestroyed) }
-                }
-            }
-            for (asteroid in finalAsteroids) {
-                if ((bullet.position - asteroid.position).getDistance() < bullet.radius + asteroid.radius) {
-                    bulletsToRemove.add(bullet.id)
-                    val newHealth = asteroid.health - 1
-                    if (newHealth <= 0) {
-                        asteroidsToRemove.add(asteroid.id); currentScore += 50; currentKillCount++
-                    } else {
-                        val idx = finalAsteroids.indexOf(asteroid)
-                        if (idx != -1) finalAsteroids[idx] = asteroid.copy(health = newHealth)
+            if (!bullet.isEnemyBullet) {
+                for (enemy in finalEnemies) {
+                    if ((bullet.position - enemy.position).getDistance() < bullet.radius + enemy.radius) {
+                        bulletsToRemove.add(bullet.id)
+                        enemiesToRemove.add(enemy.id)
+                        updatedExplosions.add(Explosion(position = enemy.position, radius = enemy.radius * 1.5f, spriteType = getEnemyDestructionType(enemy)))
+                        currentScore += 100
+                        currentKillCount++
+                        
+                        // Directly grant power-up if carrying one!
+                        enemy.carryingPowerUp?.let { p ->
+                            when (p) {
+                                PowerUpType.Shield -> currentShieldHealth = (currentShieldHealth + 1).coerceAtMost(3)
+                                PowerUpType.Nuke -> {
+                                    currentScore += finalAsteroids.size * 50
+                                    currentKillCount += finalAsteroids.size
+                                    updatedExplosions.addAll(finalAsteroids.map { Explosion(it.position, radius = it.radius * 1.5f, spriteType = getAsteroidDestructionType(it)) })
+                                    finalAsteroids.clear()
+                                }
+                                else -> currentPowerUps.add(p)
+                            }
+                            viewModelScope.launch { _events.emit(GameEvent.PowerUpCollected) }
+                        }
+                        
+                        viewModelScope.launch { _events.emit(GameEvent.EnemyDestroyed) }
                     }
                 }
-            }
-            for (item in finalItems) {
-                if ((bullet.position - item.position).getDistance() < bullet.radius + item.radius) {
+                for (asteroid in finalAsteroids) {
+                    if ((bullet.position - asteroid.position).getDistance() < bullet.radius + asteroid.radius) {
+                        bulletsToRemove.add(bullet.id)
+                        val newHealth = asteroid.health - 1
+                        if (newHealth <= 0) {
+                            asteroidsToRemove.add(asteroid.id)
+                            updatedExplosions.add(Explosion(position = asteroid.position, radius = asteroid.radius * 1.5f, spriteType = getAsteroidDestructionType(asteroid)))
+                            currentScore += 50
+                            currentKillCount++
+                        } else {
+                            val idx = finalAsteroids.indexOf(asteroid)
+                            if (idx != -1) finalAsteroids[idx] = asteroid.copy(health = newHealth)
+                        }
+                    }
+                }
+            } else {
+                // Enemy red bullets vs player ship
+                if (newInvul <= 0 && (bullet.position - newShipPos).getDistance() < bullet.radius + state.ship.radius) {
                     bulletsToRemove.add(bullet.id)
-                    itemsToRemove.add(item.id)
+                    if (currentShieldHealth > 0) {
+                        currentShieldHealth--
+                    } else {
+                        currentLives--
+                        currentPowerUps.clear()
+                    }
+                    updatedExplosions.add(Explosion(position = newShipPos, radius = state.ship.radius * 1.8f, spriteType = "trian1"))
+                    viewModelScope.launch { _events.emit(GameEvent.ShipHit) }
                 }
             }
         }
         finalBullets.removeAll { bulletsToRemove.contains(it.id) }
         finalEnemies.removeAll { enemiesToRemove.contains(it.id) }
         finalAsteroids.removeAll { asteroidsToRemove.contains(it.id) }
-        finalItems.removeAll { itemsToRemove.contains(it.id) }
         
         if (newInvul <= 0) {
             for (enemy in finalEnemies) {
@@ -334,7 +411,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         currentLives--
                         currentPowerUps.clear() 
                     }
-                    enemiesToRemove.add(enemy.id); viewModelScope.launch { _events.emit(GameEvent.ShipHit) }
+                    enemiesToRemove.add(enemy.id)
+                    updatedExplosions.add(Explosion(position = enemy.position, radius = enemy.radius * 1.5f, spriteType = getEnemyDestructionType(enemy)))
+                    updatedExplosions.add(Explosion(position = newShipPos, radius = state.ship.radius * 1.8f, spriteType = "trian1"))
+                    viewModelScope.launch { _events.emit(GameEvent.ShipHit) }
                 }
             }
             for (asteroid in finalAsteroids) {
@@ -343,29 +423,48 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         currentLives--
                         currentPowerUps.clear()
                     }
-                    asteroidsToRemove.add(asteroid.id); viewModelScope.launch { _events.emit(GameEvent.ShipHit) }
+                    asteroidsToRemove.add(asteroid.id)
+                    updatedExplosions.add(Explosion(position = asteroid.position, radius = asteroid.radius * 1.5f, spriteType = getAsteroidDestructionType(asteroid)))
+                    updatedExplosions.add(Explosion(position = newShipPos, radius = state.ship.radius * 1.8f, spriteType = "trian1"))
+                    viewModelScope.launch { _events.emit(GameEvent.ShipHit) }
                 }
             }
         }
         finalEnemies.removeAll { enemiesToRemove.contains(it.id) }
         finalAsteroids.removeAll { asteroidsToRemove.contains(it.id) }
-        
-        for (item in finalItems) {
-            if ((newShipPos - item.position).getDistance() < state.ship.radius + item.radius) {
-                itemsToRemove.add(item.id)
-                viewModelScope.launch { _events.emit(GameEvent.PowerUpCollected) }
-                when(item.type) {
-                    PowerUpType.Shield -> currentShieldHealth = (currentShieldHealth + 1).coerceAtMost(3)
-                    PowerUpType.Nuke -> {
-                        currentScore += finalAsteroids.size * 50
-                        currentKillCount += finalAsteroids.size
-                        finalAsteroids.clear()
-                    }
-                    else -> currentPowerUps.add(item.type)
-                }
+
+        // Sparks update & generation
+        val updatedSparks = state.sparks
+            .map { it.copy(position = it.position + it.velocity * deltaTime, elapsedTime = it.elapsedTime + deltaTime) }
+            .filter { it.elapsedTime < it.duration }
+            .toMutableList()
+
+        if (thrustPressed || Random.nextFloat() < 0.6f) {
+            val numSparks = if (thrustPressed) Random.nextInt(2, 5) else 1
+            repeat(numSparks) {
+                val vx = (Random.nextFloat() - 0.5f) * (if (thrustPressed) 350f else 150f)
+                val vy = (Random.nextFloat() - 0.5f) * (if (thrustPressed) 350f else 150f)
+                updatedSparks.add(
+                    Spark(
+                        position = newShipPos + Offset((Random.nextFloat() - 0.5f) * 24f, (Random.nextFloat() - 0.5f) * 24f),
+                        velocity = Offset(vx, vy),
+                        isWhite = Random.nextBoolean()
+                    )
+                )
             }
         }
-        finalItems.removeAll { itemsToRemove.contains(it.id) }
+
+        // Shockwaves update & generation
+        val updatedShockwaves = state.shockwaves
+            .map { it.copy(distanceProgress = it.distanceProgress + it.speed * deltaTime) }
+            .filter { it.distanceProgress < it.maxDistance }
+            .toMutableList()
+
+        if (thrustPressed && (state.shockwaves.isEmpty() || state.shockwaves.last().distanceProgress > 150f)) {
+            updatedShockwaves.add(Shockwave(originY = newShipPos.y))
+        }
+
+        val newFlowOffset = (state.flowOffset + deltaTime * 200f) % 120f
 
         _gameState.value = state.copy(
             ship = state.ship.copy(
@@ -379,12 +478,36 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             enemies = finalEnemies,
             asteroids = finalAsteroids,
             bullets = finalBullets,
-            items = finalItems,
+            explosions = updatedExplosions,
+            sparks = updatedSparks,
+            shockwaves = updatedShockwaves,
+            flowOffset = newFlowOffset,
+            items = emptyList(),
             score = currentScore,
             killCount = currentKillCount,
             lives = currentLives,
             levelOpacity = newLevelOpacity,
+            itemSpawnedThisLevel = newItemSpawnedState,
             isGameOver = currentLives <= 0
         )
+    }
+
+    private fun getEnemyDestructionType(enemy: Enemy): String {
+        return when (enemy.type) {
+            EnemyType.Pyramid -> {
+                val idx = abs((enemy.id % 3).toInt())
+                if (idx == 2) "trian3" else "trian1"
+            }
+            EnemyType.Cube -> "trian1"
+            else -> {
+                val planetList = listOf("planet4", "planet6", "planet7")
+                planetList[abs((enemy.id % planetList.size).toInt())]
+            }
+        }
+    }
+
+    private fun getAsteroidDestructionType(asteroid: Asteroid): String {
+        val planetList = listOf("planet4", "planet6", "planet7")
+        return planetList[abs((asteroid.id % planetList.size).toInt())]
     }
 }
